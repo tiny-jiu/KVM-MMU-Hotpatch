@@ -1,34 +1,12 @@
-# KVM MMU Hotpatch
+KVM内存热补丁工具针对 CVE-2026-53359 涉及的 KVM 影子 MMU 问题，在运行时修改内核指令，并附带一个 ELF 偏移分析脚本。本项目会直接修改内存中的内核指令，只能在自己拥有且已获授权的系统上使用，并应先在非生产环境中充分测试。
 
-A runtime hotpatch for the KVM shadow MMU issue tracked as CVE-2026-53359, together with a small ELF offset analysis helper.
+受影响的 `kvm_mmu_get_page()` 路径只比较全局帧号就可能复用影子页。如果没有同时检查 MMU role，可能会选中 role 不兼容的页面。上游修复补上了缺失的 role 比较，本热补丁采用另一种方式，将对应的条件跳转替换为 6 字节 NOP，强制代码进入分配新页面的路径，不再复用旧页面。这样无需重启宿主机，但受影响路径中的影子页将无法复用，内存占用可能增加。
 
-This project changes kernel instructions in memory. Use it only on systems you own, and test it away from production first.
+模块加载后，会通过 `kallsyms_lookup_name` 查找 `kvm_mmu_get_page` 和 `text_poke`，保存原始 6 字节指令，并在 `stop_machine` 保护下修改指令。模块卸载时会恢复原始字节。
 
-## The idea
+运行环境需要 Linux 4.18 或更高版本、与运行内核匹配的内核头文件和构建工具，以及已安装相关 KVM 模块的 x86 宿主机。所用内核构建还必须与补丁偏移完全匹配。
 
-The affected `kvm_mmu_get_page()` path can reuse a shadow page after comparing only the global frame number. Without checking the MMU role, a page with an incompatible role may be selected.
-
-The upstream fix adds the missing role comparison. This hotpatch takes a different approach: it replaces the relevant conditional jump with a six-byte NOP, forcing the code down the path that allocates a new page instead of reusing the old one.
-
-That avoids a host reboot, but it also means shadow pages are no longer reused in the affected path and memory use can increase.
-
-## Runtime implementation
-
-The module:
-
-1. Resolves `kvm_mmu_get_page` and `text_poke` with `kallsyms_lookup_name`.
-2. Saves the original six bytes.
-3. Uses `stop_machine` while patching the instruction.
-4. Restores the original bytes when the module is unloaded.
-
-## Requirements
-
-- Linux 4.18 or newer
-- Kernel headers and build tools
-- An x86 host with the relevant KVM module
-- A kernel build matching the supplied patch offset
-
-## Build and load
+编译、加载模块并查看日志可使用以下命令：
 
 ```bash
 make
@@ -36,27 +14,18 @@ sudo insmod KVM-XJ.ko
 dmesg | grep KVM-XJ
 ```
 
-Unload the module to restore the original instruction:
+卸载模块后会恢复原始指令：
 
 ```bash
 sudo rmmod KVM_XJ
 ```
 
-## Analyze another kernel
-
-Compiler options and kernel builds can move the instruction. Do not assume that the default offset fits every kernel.
+编译选项和内核版本不同，指令位置也会变化，不要直接假定默认偏移适用于所有内核。分析其他内核时可运行：
 
 ```bash
-python offset_analyzer.py /path/to/kvm.ko
+python offset_analyzer.py ./kvm.ko
 ```
 
-The helper reads ELF symbols, locates `kvm_mmu_get_page`, and prints candidate comparison and jump instructions. Update the C module only after verifying the disassembly for your exact kernel.
+脚本读取 ELF 符号表，定位 `kvm_mmu_get_page`，并输出候选比较指令和跳转指令。必须核对自己所用内核的反汇编结果，确认偏移后再修改 C 模块。
 
-## Tested offsets
-
-| Kernel | Jump offset | Status |
-| --- | --- | --- |
-| 4.18.0-496.el8.x86_64 | `0x108` | Tested |
-| 4.18.0-358.el8.x86_64 | `0xe8` | Tested |
-
-A wrong offset can crash the host. Verify it before loading the module.
+已测试的偏移包括内核版本 4.18.0-496.el8.x86_64 对应的跳转偏移 `0x108`，以及内核版本 4.18.0-358.el8.x86_64 对应的跳转偏移 `0xe8`。偏移错误可能导致宿主机崩溃，加载模块前必须完成核对。

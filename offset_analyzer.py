@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Locate candidate KVM MMU patch offsets in an ELF kernel module."""
+"""在 ELF 内核模块中查找候选 KVM MMU 补丁偏移。"""
 
 import struct
 import sys
 
 
 def find_pattern(data, pattern, start=0):
-    """Return the first offset at which a byte pattern occurs."""
+    """返回字节模式第一次出现的位置。"""
     for index in range(start, len(data) - len(pattern)):
         if data[index:index + len(pattern)] == pattern:
             return index
@@ -14,7 +14,7 @@ def find_pattern(data, pattern, start=0):
 
 
 def hexdump(data, offset=0, length=400):
-    """Print a compact hexadecimal and ASCII view of the data."""
+    """以紧凑的十六进制和 ASCII 形式输出数据。"""
     for index in range(0, min(length, len(data) - offset), 16):
         address = offset + index
         chunk = data[address:address + 16]
@@ -24,11 +24,11 @@ def hexdump(data, offset=0, length=400):
 
 
 def find_function_offset(data, function_name):
-    """Look up a function in the ELF symbol table."""
+    """在 ELF 符号表中查找函数。"""
     if data.find(function_name.encode() + b"\x00") < 0:
         return None
     if data[:4] != b"\x7fELF":
-        print("Warning: this is not a standard ELF file.")
+        print("警告：这不是标准 ELF 文件。")
         return None
 
     section_offset = struct.unpack_from("<Q", data, 0x28)[0]
@@ -73,19 +73,19 @@ def find_function_offset(data, function_name):
 
 
 def analyze_kvm(data, function_name="kvm_mmu_get_page"):
-    """Print candidate comparisons and jumps near the target function."""
+    """输出目标函数附近的候选比较指令和跳转指令。"""
     print("=" * 60)
-    print("KVM MMU patch offset analyzer")
-    print(f"Target function: {function_name}")
+    print("KVM MMU 补丁偏移分析工具")
+    print(f"目标函数：{function_name}")
     print("=" * 60)
 
     function_offset = find_function_offset(data, function_name)
     if function_offset is None:
-        print(f"Could not find {function_name}.")
-        print("Make sure the module contains symbols and has been decompressed.")
+        print(f"找不到 {function_name}。")
+        print("请确认模块保留符号表，并且已经解压。")
         return
 
-    print(f"Function offset: 0x{function_offset:x}")
+    print(f"函数偏移：0x{function_offset:x}")
     hexdump(data, function_offset, 400)
     patterns = [
         (b"\x49\x39\x47\x28", "cmp %rax, 0x28(%r15)"),
@@ -94,37 +94,37 @@ def analyze_kvm(data, function_name="kvm_mmu_get_page"):
         (b"\x48\x39\x43\x28", "cmp %rax, 0x28(%rbx)"),
     ]
 
-    print("Candidate comparison instructions:")
+    print("候选比较指令：")
     for pattern, description in patterns:
         position = find_pattern(data, pattern, function_offset)
         if position < 0 or position >= function_offset + 400:
             continue
         jump = data[position + 4:position + 10]
-        print(f"  Offset 0x{position - function_offset:x}: {description}")
-        print(f"  Following bytes: {' '.join(f'{byte:02x}' for byte in jump)}")
+        print(f"  偏移 0x{position - function_offset:x}：{description}")
+        print(f"  后续字节：{' '.join(f'{byte:02x}' for byte in jump)}")
         if jump[0] == 0x0F and jump[1] in (0x84, 0x85):
             relative = struct.unpack_from("<i", jump, 2)[0]
             target = position + 6 + relative
             kind = "je" if jump[1] == 0x84 else "jne"
-            print(f"  {kind} target offset: 0x{target - function_offset:x}")
+            print(f"  {kind} 目标偏移：0x{target - function_offset:x}")
             if jump[1] == 0x84:
-                print(f"  Candidate patch offset: 0x{position - function_offset + 4:x}")
+                print(f"  候选补丁偏移：0x{position - function_offset + 4:x}")
         print()
 
 
 def main():
-    """Parse arguments and analyze the supplied module."""
+    """解析命令行参数并分析指定模块。"""
     if len(sys.argv) != 2:
-        print("Usage: python offset_analyzer.py /path/to/kvm.ko")
+        print("用法：python offset_analyzer.py ./kvm.ko")
         sys.exit(1)
     try:
         with open(sys.argv[1], "rb") as module_file:
             data = module_file.read()
     except OSError as error:
-        print(f"Unable to read the module: {error}")
+        print(f"无法读取模块：{error}")
         sys.exit(1)
-    print(f"File: {sys.argv[1]}")
-    print(f"Size: {len(data)} bytes")
+    print(f"文件：{sys.argv[1]}")
+    print(f"大小：{len(data)} 字节")
     analyze_kvm(data)
 
 
